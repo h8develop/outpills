@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* outpills — базовые стили. Чёрный фон, холодная палитра, аптечная сетка */
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink text-lavender antialiased;
+}
+
+/* CRT-скан в hero — приём из бренд-бука (4.7 «Сайт и соцсети») */
+.crt-scan {
+  position: relative;
+  overflow: hidden;
+}
+.crt-scan::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(5, 6, 8, 0.35) 3px,
+    transparent 4px
+  );
+}
+
+/* Риска — вертикальный разрез, фирменный разделитель */
+.riska {
+  @apply inline-block w-px self-stretch bg-cobalt;
+}
+
+/* Рамка-бокс с индексом — из «Базы айдентики» */
+.spec-box {
+  @apply border border-cobalt/60;
+}
+
+/* Кнопка-«доза» */
+.btn-dose {
+  @apply inline-flex items-center justify-center gap-2 bg-electric text-void
+    font-mono text-sm uppercase tracking-widest2 px-6 py-3
+    transition-colors hover:bg-neon disabled:opacity-40 disabled:cursor-not-allowed;
+}
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 border border-cobalt text-peri
+    font-mono text-sm uppercase tracking-widest2 px-6 py-3
+    transition-colors hover:border-electric hover:text-neon;
+}
+
+/* Поля форм — «бланк рецепта» */
+.input-rx {
+  @apply w-full bg-void border border-cobalt/60 px-4 py-3 text-lavender font-mono text-sm
+    placeholder:text-steel focus:outline-none focus:border-electric;
+}
+
+.label-rx {
+  @apply block font-mono text-xs uppercase tracking-widest2 text-steel mb-2;
+}

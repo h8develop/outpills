@@ -1,0 +1,437 @@
+// outpills — доменная модель интернет-магазина одежды
+//
+// Ключевые принципы:
+//  - остатки хранятся на уровне варианта (размер × цвет), не товара;
+//  - available = stockQuantity - reservedQuantity, вычисляется в запросах;
+//  - резервирование — атомарный UPDATE с условием "хватает остатка";
+//  - OrderItem хранит snapshot товара на момент покупки;
+//  - Payment не завязан на конкретного провайдера (provider = строковый код).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Каталог ───────────────────────────
+
+enum ProductStatus {
+  DRAFT // черновик
+  PUBLISHED // опубликован
+  HIDDEN // скрыт
+  ARCHIVED // архивирован
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNISEX
+  KIDS
+}
+
+model Category {
+  id        String    @id @default(uuid())
+  slug      String    @unique
+  name      String
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  sortOrder Int        @default(0)
+  products  Product[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+model Product {
+  id          String        @id @default(uuid())
+  slug        String        @unique
+  name        String
+  brand       String        @default("outpills")
+  gender      Gender        @default(UNISEX)
+  collection  String? // "PROTOCOL 01" — дроп/коллекция
+  shortDescription String?
+  description String?
+  status      ProductStatus @default(DRAFT)
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  // Цена храним в копейках (integer) — никакой float-арифметики денег
+  basePrice     Int
+  salePrice     Int?
+  currency      String    @default("RUB")
+  saleStartsAt  DateTime?
+  saleEndsAt    DateTime?
+
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+
+  // Габариты и состав (магазин одежды)
+  weightGrams Int?
+  material    String? // "хлопок 240 г/м²"
+  careNotes   String? // уход
+  countryOfOrigin String?
+
+  variants ProductVariant[]
+  images   ProductImage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, categoryId, createdAt]) // листинг каталога
+  @@map("products")
+}
+
+enum VariantStatus {
+  ACTIVE
+  OUT_OF_STOCK
+  HIDDEN
+}
+
+model ProductVariant {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  sku     String  @unique
+  color   String // "чёрный-винил", "нэйви", "сталь"
+  colorHex String? // #0A0C12 — для свотча на витрине
+  size    String // XS..XXL или "one size"
+  barcode String?
+
+  // Остатки: available = stockQuantity - reservedQuantity.
+  // Оба поля меняются ТОЛЬКО атомарными UPDATE внутри транзакций.
+  stockQuantity    Int @default(0)
+  reservedQuantity Int @default(0)
+
+  status VariantStatus @default(ACTIVE)
+
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  stockMovements StockMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, color, size]) // одна комбинация размер+цвет
+  @@index([productId])
+  @@map("product_variants")
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Ключ объекта в S3-совместимом хранилище (не абсолютный URL —
+  // CDN/endpoint подставляется на уровне приложения)
+  objectKey String
+  alt       String?
+  isPrimary Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, sortOrder])
+  @@map("product_images")
+}
+
+// Журнал движений склада — аудит каждой операции с остатками
+enum StockMovementType {
+  RESTOCK // поступление
+  RESERVE // резерв под заказ
+  RELEASE // снятие резерва (отмена/истечение)
+  COMMIT // списание после оплаты
+  ADJUST // ручная корректировка в админке
+}
+
+model StockMovement {
+  id        String            @id @default(uuid())
+  variantId String
+  variant   ProductVariant    @relation(fields: [variantId], references: [id])
+  type      StockMovementType
+  quantity  Int // со знаком: RESERVE +2 к reserved, RELEASE -2 …
+  orderId   String?
+  order     Order?            @relation(fields: [orderId], references: [id])
+  comment   String?
+  createdAt DateTime          @default(now())
+
+  @@index([variantId, createdAt])
+  @@index([orderId])
+  @@map("stock_movements")
+}
+
+// ─────────────────────────── Пользователи ───────────────────────────
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String?
+  lastName     String?
+  phone        String?
+  role         UserRole @default(CUSTOMER)
+
+  addresses Address[]
+  orders    Order[]
+  carts     Cart[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Address {
+  id      String @id @default(uuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  country String @default("RU")
+  city    String
+  street  String
+  building String?
+  apartment String?
+  postalCode String?
+  comment String?
+
+  orders Order[]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+// ─────────────────────────── Корзина ───────────────────────────
+
+// Корзина существует и для гостя (по cartToken в cookie), и для юзера.
+model Cart {
+  id        String     @id @default(uuid())
+  token     String     @unique @default(uuid()) // гостевой идентификатор
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id])
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([userId])
+  @@map("carts")
+}
+
+model CartItem {
+  id        String         @id @default(uuid())
+  cartId    String
+  cart      Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  quantity  Int
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([cartId, variantId])
+  @@map("cart_items")
+}
+
+// ─────────────────────────── Заказы ───────────────────────────
+
+enum OrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  PAYMENT_FAILED
+  CANCELLED
+  EXPIRED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  RETURNED
+}
+
+model DeliveryMethod {
+  id          String  @id @default(uuid())
+  code        String  @unique // "cdek", "post", "courier"
+  name        String
+  description String?
+  price       Int // копейки
+  isActive    Boolean @default(true)
+  orders      Order[]
+
+  @@map("delivery_methods")
+}
+
+model PromoCode {
+  id            String    @id @default(uuid())
+  code          String    @unique
+  discountPercent Int? // либо процент…
+  discountFixed   Int? // …либо фикс в копейках
+  isActive      Boolean   @default(true)
+  startsAt      DateTime?
+  endsAt        DateTime?
+  maxUses       Int?
+  usedCount     Int       @default(0)
+  orders        Order[]
+
+  @@map("promo_codes")
+}
+
+model Order {
+  id     String      @id @default(uuid())
+  number String      @unique // человекочитаемый: OP-000042
+  status OrderStatus @default(PENDING_PAYMENT)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // Контакты гостя (заказ без регистрации)
+  email String
+  phone String?
+  customerName String?
+
+  addressId String?
+  address   Address? @relation(fields: [addressId], references: [id])
+  // Snapshot адреса строкой — заказ не ломается при удалении адреса
+  shippingAddress String?
+
+  deliveryMethodId String?
+  deliveryMethod   DeliveryMethod? @relation(fields: [deliveryMethodId], references: [id])
+  deliveryPrice    Int             @default(0)
+
+  promoCodeId String?
+  promoCode   PromoCode? @relation(fields: [promoCodeId], references: [id])
+
+  subtotal Int // сумма позиций, копейки
+  discount Int @default(0)
+  total    Int // subtotal - discount + deliveryPrice
+
+  // Ключ идемпотентности checkout — защита от двойного создания заказа
+  idempotencyKey String? @unique
+
+  // Заказ в PENDING_PAYMENT истекает: резерв снимается воркером
+  reservationExpiresAt DateTime?
+
+  items          OrderItem[]
+  payments       Payment[]
+  stockMovements StockMovement[]
+  statusHistory  OrderStatusHistory[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, reservationExpiresAt]) // выборка просроченных резервов
+  @@map("orders")
+}
+
+// Snapshot товара на момент покупки — заказ не ломается,
+// если товар потом изменят или удалят.
+model OrderItem {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  productId    String // id товара на момент покупки
+  productName  String
+  sku          String
+  size         String
+  color        String
+  price        Int // цена за единицу на момент покупки, копейки
+  quantity     Int
+  imageKey     String? // главное изображение на момент покупки
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  from      OrderStatus?
+  to        OrderStatus
+  comment   String?
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+// ─────────────────────────── Платежи ───────────────────────────
+
+enum PaymentStatus {
+  PENDING
+  REQUIRES_ACTION
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+}
+
+model Payment {
+  id      String        @id @default(uuid())
+  orderId String
+  order   Order         @relation(fields: [orderId], references: [id])
+  status  PaymentStatus @default(PENDING)
+
+  provider String // "mock" | "cloudpayments" | "robokassa" — код провайдера
+  externalId String? // id платежа на стороне провайдера
+  amount   Int
+  currency String @default("RUB")
+
+  // Idempotency: повторный webhook с тем же ключом не обрабатывается дважды
+  idempotencyKey String? @unique
+
+  confirmationUrl String? // куда редиректить пользователя на оплату
+  failureReason   String?
+  rawPayload      Json? // последний webhook-payload для аудита
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([provider, externalId])
+  @@index([status])
+  @@map("payments")
+}
+
+// Журнал обработанных webhook-ов — вторая линия защиты от дублей
+model WebhookEvent {
+  id         String   @id @default(uuid())
+  provider   String
+  externalId String // id события у провайдера
+  payload    Json
+  processedAt DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@map("webhook_events")
+}
+
+// ─────────────────────────── Настройки ───────────────────────────
+
+model StoreSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("store_settings")
+}

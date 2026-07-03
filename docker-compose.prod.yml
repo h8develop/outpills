@@ -1,0 +1,137 @@
+# outpills — PRODUCTION (MVP: один VPS)
+#
+# Запуск:
+#   cp .env.production.example .env.production   # заполнить реальными значениями
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#   docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
+#
+# ВАЖНО: эта конфигурация — MVP / small production на одном сервере.
+# Она НЕ рассчитана на 40–80k одновременных пользователей — для такой
+# нагрузки см. docs/SCALING.md (Kubernetes, managed DB, CDN, очереди).
+
+name: outpills
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BASE_DOMAIN: ${BASE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # сертификаты Let's Encrypt
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./deploy/backups:/backups # том для pg_dump (см. README: бэкапы)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+    # Порт наружу НЕ публикуем — БД доступна только из docker-сети
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    restart: always
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    logging: *logging
+    # Горизонтальное масштабирование в рамках одного хоста:
+    #   docker compose -f docker-compose.prod.yml up -d --scale api=3
+    # Backend stateless — Caddy сбалансирует. Воркеры при этом оставить
+    # на одной реплике (RUN_WORKERS=0 на остальных).
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        NEXT_PUBLIC_API_URL: ${API_URL}
+    restart: always
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:4000/api
+      NEXT_PUBLIC_API_URL: ${API_URL}
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

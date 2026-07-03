@@ -1,0 +1,62 @@
+# outpills — reverse proxy (production, MVP на одном VPS)
+#
+# Caddy сам получает и продлевает сертификаты Let's Encrypt для всех
+# доменов ниже. Достаточно A-записей на IP сервера:
+#   {$BASE_DOMAIN}, www.{$BASE_DOMAIN}, api.{$BASE_DOMAIN}, media.{$BASE_DOMAIN}
+#
+# BASE_DOMAIN и ACME_EMAIL приходят из .env.production через compose.
+
+{
+    email {$ACME_EMAIL}
+}
+
+# ── Публичный сайт ──
+{$BASE_DOMAIN} {
+    encode gzip zstd
+    reverse_proxy web:3000
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+
+www.{$BASE_DOMAIN} {
+    redir https://{$BASE_DOMAIN}{uri} permanent
+}
+
+# ── API ──
+api.{$BASE_DOMAIN} {
+    encode gzip zstd
+
+    # Простейший WAF-слой: режем явно лишние методы и огромные тела
+    @bad_methods method TRACE CONNECT
+    respond @bad_methods 405
+
+    request_body {
+        max_size 5MB
+    }
+
+    reverse_proxy api:4000 {
+        # health-приложения / балансировка между репликами api при --scale
+        health_uri /health/ready
+        health_interval 10s
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+    }
+}
+
+# ── Медиа (MinIO / object storage). В идеале перед этим доменом — CDN ──
+media.{$BASE_DOMAIN} {
+    encode gzip
+    reverse_proxy minio:9000
+
+    header {
+        Cache-Control "public, max-age=31536000, immutable"
+    }
+}

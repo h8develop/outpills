@@ -1,0 +1,117 @@
+# outpills — DEV-окружение
+# Запуск: docker compose up -d
+# Поднимает: PostgreSQL, Redis, MinIO (S3), backend API, frontend.
+# Для локальной разработки без Docker можно поднять только db/redis/minio:
+#   docker compose up -d db redis minio
+
+name: outpills-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: outpills
+      POSTGRES_PASSWORD: outpills_dev # dev-only, в проде — из .env
+      POSTGRES_DB: outpills
+    ports:
+      # 15432 на хосте — чтобы не конфликтовать с локальным Postgres
+      - "15432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outpills -d outpills"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: outpills
+      MINIO_ROOT_PASSWORD: outpills_dev_secret
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # веб-консоль
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Создаёт бакет и открывает публичное чтение (для витрины)
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 outpills outpills_dev_secret &&
+      mc mb --ignore-existing local/outpills-media &&
+      mc anonymous set download local/outpills-media
+      "
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://outpills:outpills_dev@db:5432/outpills?connection_limit=10
+      REDIS_URL: redis://redis:6379
+      STORAGE_ENDPOINT: http://minio:9000
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+      API_INTERNAL_URL: http://api:4000/api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - api
+
+volumes:
+  pg_data:
+  minio_data:
