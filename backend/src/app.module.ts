@@ -24,13 +24,16 @@ import { validateEnv } from './config/env.validation';
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv, envFilePath: ['.env', '../.env'] }),
     ScheduleModule.forRoot(),
     // Rate limiting. In-memory на реплику; для многорепличного прода —
-    // Redis-storage (см. docs/SCALING.md)
-    ThrottlerModule.forRoot([
-      {
-        ttl: Number(process.env.RATE_LIMIT_WINDOW || 60) * 1000,
-        limit: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 300),
-      },
-    ]),
+    // Redis-storage (см. README «Масштабирование»). forRootAsync — чтобы
+    // env читался после загрузки .env, а не в момент импорта модуля
+    ThrottlerModule.forRootAsync({
+      useFactory: () => [
+        {
+          ttl: Number(process.env.RATE_LIMIT_WINDOW || 60) * 1000,
+          limit: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 300),
+        },
+      ],
+    }),
     PrismaModule,
     RedisModule,
     HealthModule,
