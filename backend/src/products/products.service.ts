@@ -143,7 +143,12 @@ export class ProductsService {
       where: { status: 'PUBLISHED', categoryId: product.categoryId, id: { not: product.id } },
       take,
       orderBy: { createdAt: 'desc' },
-      include: { images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], take: 1 } },
+      include: {
+        images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], take: 1 },
+        variants: {
+          select: { id: true, size: true, color: true, colorHex: true, status: true },
+        },
+      },
     });
     return items.map((p) => this.toPublic(p));
   }

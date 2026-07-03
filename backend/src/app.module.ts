@@ -20,7 +20,8 @@ import { validateEnv } from './config/env.validation';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    // .env ищем и в backend/, и в корне репо — локальный запуск одной командой
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv, envFilePath: ['.env', '../.env'] }),
     ScheduleModule.forRoot(),
     // Rate limiting. In-memory на реплику; для многорепличного прода —
     // Redis-storage (см. docs/SCALING.md)

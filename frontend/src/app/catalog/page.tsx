@@ -65,8 +65,9 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
       </nav>
 
       <div className="flex flex-col lg:flex-row gap-10">
-        {/* Фильтры — «бланк назначения» */}
-        <aside className="lg:w-56 shrink-0 space-y-8">
+        {/* Фильтры — «бланк назначения». На мобиле — компактная сетка 2×2,
+            на десктопе — колонка слева */}
+        <aside className="shrink-0 grid grid-cols-2 gap-x-6 gap-y-6 lg:block lg:w-56 lg:space-y-8">
           <div>
             <p className="label-rx">Раздел</p>
             <ul className="space-y-1">
@@ -156,7 +157,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
 
           {/* Пагинация */}
           {data.totalPages > 1 && (
-            <div className="flex gap-2 mt-10 justify-center font-mono text-sm">
+            <div className="flex flex-wrap gap-2 mt-10 justify-center font-mono text-sm">
               {Array.from({ length: data.totalPages }, (_, i) => i + 1).map((p) => (
                 <Link
                   key={p}

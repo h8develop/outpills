@@ -7,9 +7,9 @@ import { formatPrice } from '@/lib/api';
  * бейджи в языке дозировок. SOLD OUT = «доза исчерпана».
  */
 export function ProductCard({ product, index }: { product: Product; index: number }) {
-  const image = product.images[0];
-  const soldOut =
-    product.variants.length > 0 && product.variants.every((v) => v.status === 'OUT_OF_STOCK');
+  const image = product.images?.[0];
+  const variants = product.variants ?? [];
+  const soldOut = variants.length > 0 && variants.every((v) => v.status === 'OUT_OF_STOCK');
   const isNew =
     Date.now() - new Date(product.createdAt).getTime() < 1000 * 60 * 60 * 24 * 30;
 
@@ -75,7 +75,7 @@ export function ProductCard({ product, index }: { product: Product; index: numbe
         </div>
         {/* Свотчи цветов из вариантов */}
         <div className="flex gap-1.5 mt-1">
-          {[...new Map(product.variants.map((v) => [v.color, v.colorHex])).entries()]
+          {[...new Map(variants.map((v) => [v.color, v.colorHex])).entries()]
             .slice(0, 4)
             .map(([color, hex]) => (
               <span

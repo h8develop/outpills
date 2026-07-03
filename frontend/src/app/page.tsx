@@ -25,7 +25,7 @@ export default async function HomePage() {
           <p className="font-mono text-xs text-steel uppercase tracking-widest2 mb-6">
             薬局 · RX 24/7 · ПАРТИЯ PROTOCOL 01
           </p>
-          <h1 className="font-condensed uppercase leading-[0.95] text-6xl sm:text-8xl text-lavender">
+          <h1 className="font-condensed uppercase leading-[0.95] text-5xl sm:text-7xl lg:text-8xl text-lavender">
             Снаружи <span className="text-electric">передоз</span>.
             <br />
             Внутри — ясность.
